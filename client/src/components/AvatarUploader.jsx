@@ -1,55 +1,142 @@
-import { useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import apiClient from "../services/apiClient.js";
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TODO Task 1: Drag-and-drop
-//   - add onDragOver / onDragLeave / onDrop handlers to the drop zone
-//   - call e.preventDefault() in onDragOver AND onDrop
-//   - read the dropped file from e.dataTransfer.files[0]
-//   - toggle an `isDragging` state to apply the "dragging" class
-//
-// TODO Task 2: Client-side validation
-//   - before uploading, check file.type is an allowed image type
-//   - and file.size <= 5 * 1024 * 1024 (5MB)
-//   - show an error and stop if invalid
-//
-// TODO Task 3: Local preview
-//   - const url = URL.createObjectURL(file); use it as <img src>
-//   - revoke it with URL.revokeObjectURL in a useEffect cleanup
-//
-// TODO Task 4: Axios upload with progress
-//   - build FormData, append the file under the name "avatar"
-//   - apiClient.post("/api/upload", formData, { onUploadProgress: ... })
-//   - percent = Math.round((event.loaded * 100) / event.total)
-//   - DO NOT set a Content-Type header
-// ─────────────────────────────────────────────────────────────────────────────
 
 const MAX_SIZE = 5 * 1024 * 1024;
 const ALLOWED = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
 export default function AvatarUploader() {
   const [file, setFile] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [isDragging, setIsDragging] = useState(false);
+  const [error, setError] = useState("");
+  const [progress, setProgress] = useState(0);
+  const [uploadedUrl, setUploadedUrl] = useState("");
   const inputRef = useRef(null);
 
-  // Stub upload - replace with FormData + Axios onUploadProgress (Task 4).
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
+
+  function handleFile(selectedFile) {
+    setError("");
+    setUploadedUrl("");
+    setProgress(0);
+
+    if (!selectedFile) return;
+
+    if (!ALLOWED.includes(selectedFile.type)) {
+      setFile(null);
+      setPreviewUrl("");
+      setError("Choose a JPEG, PNG, WebP, or GIF image.");
+      return;
+    }
+
+    if (selectedFile.size > MAX_SIZE) {
+      setFile(null);
+      setPreviewUrl("");
+      setError("File must be 5MB or smaller.");
+      return;
+    }
+
+    setFile(selectedFile);
+    setPreviewUrl(URL.createObjectURL(selectedFile));
+  }
+
+  function handleDragOver(event) {
+    event.preventDefault();
+    setIsDragging(true);
+  }
+
+  function handleDragLeave(event) {
+    if (!event.currentTarget.contains(event.relatedTarget)) {
+      setIsDragging(false);
+    }
+  }
+
+  function handleDrop(event) {
+    event.preventDefault();
+    setIsDragging(false);
+    handleFile(event.dataTransfer.files[0]);
+  }
+
   async function upload() {
     if (!file) return;
-    console.log("TODO: upload", file.name);
+
+    const formData = new FormData();
+    formData.append("avatar", file);
+    setError("");
+    setUploadedUrl("");
+    setProgress(0);
+
+    try {
+      const response = await apiClient.post("/api/upload", formData, {
+        onUploadProgress: (event) => {
+          if (event.total) {
+            setProgress(Math.round((event.loaded * 100) / event.total));
+          }
+        },
+      });
+      setProgress(100);
+      setUploadedUrl(
+        new URL(
+          response.data.url,
+          apiClient.defaults.baseURL || window.location.origin,
+        ).href,
+      );
+    } catch (uploadError) {
+      setError(
+        uploadError.response?.data?.error ||
+          uploadError.message ||
+          "Upload failed. Please try again.",
+      );
+    }
   }
 
   return (
     <div>
-      <div className="drop-zone" onClick={() => inputRef.current.click()}>
+      <div
+        className={`drop-zone${isDragging ? " dragging" : ""}`}
+        onClick={(event) => {
+          if (event.target !== inputRef.current) inputRef.current.click();
+        }}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
         <p>Drag an image here, or click to choose</p>
         <input
           ref={inputRef}
           type="file"
           accept="image/*"
           hidden
-          onChange={(e) => setFile(e.target.files[0])}
+          onChange={(event) => {
+            handleFile(event.target.files[0]);
+            event.target.value = "";
+          }}
         />
       </div>
 
+      {previewUrl && <img className="preview" src={previewUrl} alt="Avatar preview" />}
+      {error && <p className="error" role="alert">{error}</p>}
+      {progress > 0 && (
+        <div
+          className="bar"
+          role="progressbar"
+          aria-label="Upload progress"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow={progress}
+        >
+          <div className="fill" style={{ width: `${progress}%` }} />
+        </div>
+      )}
+      {uploadedUrl && (
+        <p>
+          Uploaded: <a href={uploadedUrl}>{uploadedUrl}</a>
+        </p>
+      )}
       <button onClick={upload} disabled={!file}>Upload</button>
     </div>
   );
